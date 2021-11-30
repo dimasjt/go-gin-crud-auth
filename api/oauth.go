@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crud-with-auth/db"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 
@@ -75,6 +78,7 @@ func (oauth *OAuthAPI) GithubCallbackHandler(c *gin.Context) {
 		return
 	}
 
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	res, err := client.Do(req)
 	if err != nil {
 		c.AbortWithError(http.StatusBadRequest, err)
@@ -82,5 +86,31 @@ func (oauth *OAuthAPI) GithubCallbackHandler(c *gin.Context) {
 	}
 	defer res.Body.Close()
 
-	c.JSON(http.StatusOK, &token)
+	var githubResponse = GithubUserResponse{}
+	err = json.NewDecoder(res.Body).Decode(&githubResponse)
+	if err != nil {
+		c.AbortWithError(http.StatusBadRequest, err)
+		return
+	}
+
+	var user db.User
+	rows := oauth.db.Storage.Where("provider_id = ? AND provider = 'github'", githubResponse.ID).First(&user).RowsAffected
+
+	if rows == 0 {
+		user.Provider = "github"
+		user.ProviderID = githubResponse.ID
+		if err = oauth.db.Storage.Create(&user).Error; err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+	}
+
+	if token, err := user.Token(); err != nil {
+		c.AbortWithError(http.StatusBadRequest, err)
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Login successfully",
+			"token":   token,
+		})
+	}
 }
